@@ -44,11 +44,11 @@ docker run -it \
   -e QT_X11_NO_MITSHM=1 \
   -e XAUTHORITY=$XAUTH \
   -v "$XAUTH:$XAUTH" \
-  -v "/home/$USER/graph_net:/home/argrobotx/graph_net" \
+  -v "/home/$USER/graph_net:/home/arg/graph_net" \
   -v "/tmp/.X11-unix:/tmp/.X11-unix" \
   -v "/etc/localtime:/etc/localtime:ro" \
   -v "/dev:/dev" \
-  --workdir "/home/argrobotx/graph_net" \
+  --workdir "/home/arg/graph_net" \
   --user "root:root" \
   --name arg_gnn \
   --network host \
