@@ -115,7 +115,10 @@ RUN pip3 install \
 RUN pip3 install \
     matplotlib \
     networkx \
-    jupyter
+    jupyter \
+    gym \
+    pygame \
+    numpy==1.21.1
 
 
 ###################################### Colab Local #####################################  
