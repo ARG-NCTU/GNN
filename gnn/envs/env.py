@@ -20,13 +20,11 @@ DISPLAY_UAV_AGENT = (250, 205, 30)
 DISPLAY_UNREACH_GOAL = (250, 15, 30)
 DISPLAY_REACHED_GOAL = (0, 190, 50)
 
-DATA_UNKNOWN = 0
-DATA_WHITE = 0
-DATA_WATER = 0
-DATA_LAND = 1
-DATA_USV_AGENT = 2
-DATA_UNREACH_GOAL = 3
-DATA_REACHED_GOAL = 4
+DATA_UNKNOWN =      (1,0)
+DATA_WATER =        (0,0)
+DATA_LAND =         (1,0)
+DATA_UNREACH_GOAL = (0,1)
+
 
 ENCODE_USV = (1, 0)
 ENCODE_UAV = (0, 1)
@@ -49,10 +47,10 @@ class EnvManager(gym.Env):
         self.cfg = args
         self.keyboard_input = [0, 0]
         self.display_fov = np.zeros((self.cfg.usv_sense_radius*2+2, self.cfg.usv_sense_radius*2+2, 3))
-        self.data_fov = np.zeros((self.cfg.usv_sense_radius*2+2, self.cfg.usv_sense_radius*2+2))
+        self.data_fov = np.zeros((self.cfg.usv_sense_radius*2+2, self.cfg.usv_sense_radius*2+2, self.cfg.channel))
 
         self.display_map = np.zeros((self.cfg.env_dim[1], self.cfg.env_dim[0], 3))
-        self.data_map = np.zeros((self.cfg.env_dim[1], self.cfg.env_dim[0]))
+        self.data_map = np.zeros((self.cfg.env_dim[1], self.cfg.env_dim[0], self.cfg.channel))
 
         
         # gym requirement 
@@ -64,7 +62,7 @@ class EnvManager(gym.Env):
                     shape = (2,),
                     dtype = float,
                 ),
-            ) * self.cfg.usv_agent_num
+            )
         )
         self.uav_action_space = gym.spaces.Tuple(
             (
@@ -74,7 +72,7 @@ class EnvManager(gym.Env):
                     shape = (2,),
                     dtype = float,
                 ),
-            ) * self.cfg.uav_agent_num
+            )
         )
 
         self.observatiopn_space = {
@@ -103,7 +101,7 @@ class EnvManager(gym.Env):
         self.observatiopn_space["vel"] = np.zeros(self.cfg.usv_agent_num + self.cfg.uav_agent_num)
         self.observatiopn_space["goal_status"] = np.zeros(self.cfg.goal_num)
         self.observatiopn_space["sense_radius"] = np.zeros(self.cfg.usv_agent_num + self.cfg.uav_agent_num)
-        self.observatiopn_space["local_fov"] = np.zeros((self.cfg.usv_agent_num + self.cfg.uav_agent_num, self.cfg.usv_sense_radius*2+2, self.cfg.usv_sense_radius*2+2, 3))
+        self.observatiopn_space["local_fov"] = np.zeros((self.cfg.usv_agent_num + self.cfg.uav_agent_num, self.cfg.usv_sense_radius*2+2, self.cfg.usv_sense_radius*2+2, self.cfg.channel))
 
         for agent in range(self.cfg.usv_agent_num + self.cfg.uav_agent_num):
             if agent < self.cfg.usv_agent_num:
@@ -203,13 +201,15 @@ class EnvManager(gym.Env):
         return
 
     def goalUpdate(self): 
+        state = False
         idx = 0
         for goal in self.observatiopn_space["goal"]:
             for agent in self.observatiopn_space["pos"]:
-                if self.distanceP2P(goal, agent) <= self.cfg.goal_margin:
+                if self.distanceP2P(goal, agent) <= self.cfg.goal_margin and self.observatiopn_space["goal_status"][idx] == 0:
                     self.observatiopn_space["goal_status"][idx] = 1
+                    state = True
             idx+=1
-        return
+        return state
 
     def randomSpawnAgent(self):
         random_agent = gym.spaces.Box(
@@ -230,18 +230,12 @@ class EnvManager(gym.Env):
         self.observatiopn_space["goal_status"] = np.zeros(self.cfg.goal_num)
         return
 
-    def debugSample(self):
-        print("\n")
-        test1 = self.usv_action_space.sample()
-        print(type(test1))
-        print(test1)
-        print(test1[0])
-        print("-------------------")
-        test = self.uav_action_space.sample()
-        print(type(test))
-        print(test)
-        print(test[0])
-        return
+    def randomAction(self, agent_index):
+        if (self.observatiopn_space["veh_type"][agent_index] == ENCODE_USV).all():
+            return self.usv_action_space.sample()
+        else:
+            return self.uav_action_space.sample()
+        
     
     def displayGoalStaus(self, goal_index):
         if self.observatiopn_space["goal_status"][goal_index] == False:
@@ -288,6 +282,7 @@ class EnvManager(gym.Env):
                         x = int(grid[0])
                         if y >= 1 and y < 2*fov_radius+1 and x >= 1 and x < 2*fov_radius+1:
                             self.display_fov[y][x] = DISPLAY_LAND
+                            self.data_fov[y][x] = DATA_LAND
         return
 
     def agentGlobalPerception(self, agent_index):
@@ -341,7 +336,7 @@ class EnvManager(gym.Env):
             for j in range(fov_radius*2+2):
                 self.data_fov[i][j] = old_fov[j][i]
 
-        self.observatiopn_space["local_fov"][agent_index] = self.display_fov
+        self.observatiopn_space["local_fov"][agent_index] = self.data_fov
         return
     
     def agentCollisionUpdate(self, agent_index):
@@ -384,6 +379,41 @@ class EnvManager(gym.Env):
         else:
             # print("Safe")
             return False
+
+    def step(self, agent_index, action):
+        finished = False
+        reward = 0
+
+        if abs(action[0]) > self.observatiopn_space["vel"][agent_index]:
+            if action[0] > 0: 
+                action[0] = self.observatiopn_space["vel"][agent_index]
+            else:
+                action[0] = self.observatiopn_space["vel"][agent_index]
+
+        if abs(action[1]) > self.observatiopn_space["vel"][agent_index]:
+            if action[1] > 0: 
+                action[1] = self.observatiopn_space["vel"][agent_index]
+            else:
+                action[1] = self.observatiopn_space["vel"][agent_index]
+        
+        self.observatiopn_space["pos"][agent_index][0] += action[0]
+        self.observatiopn_space["pos"][agent_index][1] += action[1]
+
+        if self.goalUpdate():
+            reward += 100
+        
+        if (self.observatiopn_space["goal_status"]).all() == 1:
+            reward += 300
+            finished = True
+            
+        for agent in range(self.cfg.usv_agent_num + self.cfg.uav_agent_num):
+            self.agentPerceptionUpdate(agent)
+            if self.agentCollisionUpdate(agent):
+                reward -= 50
+                finished = True
+
+
+        return self.observatiopn_space, reward, finished
 
     def manualDisplay(self):
         pygame.init()
@@ -472,10 +502,3 @@ class EnvManager(gym.Env):
             pygame.display.update()
 
         pygame.quit()
-
-
-
-
-
-
-
