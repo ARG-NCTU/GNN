@@ -7,6 +7,10 @@ import numpy as np
 import math
 import csv
 
+# log usage
+from datetime import datetime
+# log usage
+
 DISPLAY_UNKNOWN = (0, 0, 0)
 DISPLAY_WHITE = (255, 255, 255)
 DISPLAY_WATER = (14, 180, 255)
@@ -75,37 +79,49 @@ class EnvManager(gym.Env):
 
         self.observatiopn_space = {
             "veh_type": [], 
-            "veh_collision": [],
+            "collision_radius": [],
+            "sense_radius": [],
             "pos": [], 
             "goal": [], 
             "vel": [], 
-            "goal_index": [], 
+            "goal_status": [], 
             "local_fov": []
         }
 
         # environment params
         self.training_enable = True
         self.env_grid_px_per_m = self.cfg.env_px / self.cfg.env_dim[0]
-    
-    def initialize(self):
+
+    def printLog(self, msg):
+        currentDateAndTime = datetime.now()
+        print("[{time}]{info}".format(time = currentDateAndTime, info = msg))
+        return
+
+    def initialize(self): # declare observation space size & load map
         self.observatiopn_space["veh_type"] = np.zeros((self.cfg.usv_agent_num + self.cfg.uav_agent_num, 2))
-        self.observatiopn_space["veh_collision"] = np.zeros(self.cfg.usv_agent_num + self.cfg.uav_agent_num)
+        self.observatiopn_space["collision_radius"] = np.zeros(self.cfg.usv_agent_num + self.cfg.uav_agent_num)
         self.observatiopn_space["vel"] = np.zeros(self.cfg.usv_agent_num + self.cfg.uav_agent_num)
-        self.observatiopn_space["goal_index"] = np.zeros(self.cfg.goal_num)
+        self.observatiopn_space["goal_status"] = np.zeros(self.cfg.goal_num)
+        self.observatiopn_space["sense_radius"] = np.zeros(self.cfg.usv_agent_num + self.cfg.uav_agent_num)
         self.observatiopn_space["local_fov"] = np.zeros((self.cfg.usv_agent_num + self.cfg.uav_agent_num, self.cfg.usv_sense_radius*2+2, self.cfg.usv_sense_radius*2+2, 3))
 
         for agent in range(self.cfg.usv_agent_num + self.cfg.uav_agent_num):
             if agent < self.cfg.usv_agent_num:
                 self.observatiopn_space["veh_type"][agent] = ENCODE_USV
-                self.observatiopn_space["veh_collision"][agent] = self.cfg.usv_collision_radius
-                self.observatiopn_space["vel"][agent] = self.cfg.usv_max_v
+                self.observatiopn_space["collision_radius"][agent] = self.cfg.usv_collision_radius
+                self.observatiopn_space["sense_radius"][agent] = self.cfg.usv_sense_radius
+                self.observatiopn_space["vel"][agent] = self.cfg.usv_max_v # manual 
             else:
                 self.observatiopn_space["veh_type"][agent] = ENCODE_UAV
-                self.observatiopn_space["veh_collision"][agent] = self.cfg.uav_collision_radius
-                self.observatiopn_space["vel"][agent] = self.cfg.uav_max_v
+                self.observatiopn_space["collision_radius"][agent] = self.cfg.uav_collision_radius
+                self.observatiopn_space["sense_radius"][agent] = self.cfg.uav_sense_radius
+                self.observatiopn_space["vel"][agent] = self.cfg.uav_max_v # manual 
         
         self.loadMap()
-        
+
+        return
+
+    def reset(self): # radom assign agent & goal position, return observation space
         collision_check = True
         while collision_check == True:
             self.randomSpawnAgent()
@@ -114,10 +130,13 @@ class EnvManager(gym.Env):
                 if self.agentCollisionUpdate(agent) == True:
                     collision_check = True
                     break
-        return
-    
-    def fetchState(self):
+
+        for agent in range(self.cfg.usv_agent_num + self.cfg.uav_agent_num):
+            self.agentPerceptionUpdate(agent)
+        
+
         return self.observatiopn_space
+    
 
     def loadMap(self):
         raw_map_array = []
@@ -131,11 +150,6 @@ class EnvManager(gym.Env):
                     self.display_map[j][i] = DISPLAY_MAP[int(raw_map_array[i][j])]
                     self.data_map[j][i] = DATA_MAP[int(raw_map_array[i][j])]
         return
-    
-    def getAgentFOV(self, agent_index):
-        return self.observatiopn_space["local_fov"][agent_index]
-        # return self.display_fov
-    
 
     def transToDispaly(self, standard_x, standard_y):
         pygame_x = round(self.cfg.env_px / 2 - standard_y * self.env_grid_px_per_m)
@@ -157,14 +171,35 @@ class EnvManager(gym.Env):
             return DISPLAY_LAND
         else:
             return DISPLAY_LAND
-            
 
+    def getCollisionBody(self, agent_index, other_agent_pos, collision_radius):
+        fov_radius = int(self.observatiopn_space["sense_radius"][agent_index])
+        diameter = int(collision_radius*2)
+        offset_radius = diameter/2-0.5
+        pixels_in_line = 0
+        pixels_per_line = []
+        collision_gird_array = []
+        for i in range(diameter):
+            for j in range(diameter):
+                x = i - offset_radius
+                y = j - offset_radius
+                if x * x + y * y <= offset_radius * offset_radius + 1:
+                    pixels_in_line += 1
+            pixels_per_line.append(pixels_in_line)
+            pixels_in_line = 0
+
+        for i in range(len(pixels_per_line)):
+            grid_y = fov_radius-round(other_agent_pos[1])+(len(pixels_per_line)-1)/2-i
+            for j in range(pixels_per_line[i]):
+                grid_x = fov_radius-round(other_agent_pos[0])+(pixels_per_line[i]-1)/2-j
+                collision_gird_array.append([grid_x, grid_y])
+        return collision_gird_array
+            
     def manualUpdate(self, agent_index):
         self.observatiopn_space["pos"][agent_index][0] += self.keyboard_input[0]*self.observatiopn_space["vel"][agent_index]
         self.observatiopn_space["pos"][agent_index][1] += self.keyboard_input[1]*self.observatiopn_space["vel"][agent_index]
         self.keyboard_input[0] = 0
         self.keyboard_input[1] = 0
-        # print(self.observatiopn_space["pos"][agent_index])
         return
 
     def goalUpdate(self): 
@@ -172,8 +207,7 @@ class EnvManager(gym.Env):
         for goal in self.observatiopn_space["goal"]:
             for agent in self.observatiopn_space["pos"]:
                 if self.distanceP2P(goal, agent) <= self.cfg.goal_margin:
-                    self.observatiopn_space["goal_index"][idx] = 1
-                    # print("REACH")
+                    self.observatiopn_space["goal_status"][idx] = 1
             idx+=1
         return
 
@@ -193,7 +227,7 @@ class EnvManager(gym.Env):
         )
         self.observatiopn_space["goal"] = random_goal.sample()
         self.observatiopn_space["pos"] = random_agent.sample()
-        self.observatiopn_space["goal_index"] = np.zeros(self.cfg.goal_num)
+        self.observatiopn_space["goal_status"] = np.zeros(self.cfg.goal_num)
         return
 
     def debugSample(self):
@@ -209,33 +243,51 @@ class EnvManager(gym.Env):
         print(test[0])
         return
     
-    def goalReached(self, goal_index):
-        if self.observatiopn_space["goal_index"][goal_index] == False:
+    def displayGoalStaus(self, goal_index):
+        if self.observatiopn_space["goal_status"][goal_index] == False:
             return DISPLAY_UNREACH_GOAL
         else:
             return DISPLAY_REACHED_GOAL
     
     def agentLocalPerception(self, agent_index):
         pos = [
-            round(self.observatiopn_space["pos"][agent_index][0]), 
-            round(self.observatiopn_space["pos"][agent_index][1])
+            self.observatiopn_space["pos"][agent_index][0], 
+            self.observatiopn_space["pos"][agent_index][1]
         ]
-        
-        fov_radius = self.cfg.usv_sense_radius
+        collision_radius = self.observatiopn_space["collision_radius"][agent_index]
+        fov_radius = int(self.observatiopn_space["sense_radius"][agent_index])
 
+        # check static obstacle
         for i in range(fov_radius*2):
             for j in range(fov_radius*2):
-                map_x = round(self.cfg.env_dim[0]/2)-int(pos[1])+i-fov_radius
-                map_y = round(self.cfg.env_dim[1]/2)-int(pos[0])+j-fov_radius
+                map_x = round(self.cfg.env_dim[0]/2)-int(round(pos[1]))+i-fov_radius
+                map_y = round(self.cfg.env_dim[1]/2)-int(round(pos[0]))+j-fov_radius
                 if (map_x >= 0 and map_x < self.cfg.env_dim[0]) and (map_y >= 0 and map_y < self.cfg.env_dim[1]):
                     self.display_fov[i+1][j+1] = self.display_map[map_x][map_y]
                     self.data_fov[i+1][j+1] = self.data_map[map_x][map_y]
                 else:
                     self.display_fov[i+1][j+1] = DISPLAY_UNKNOWN
                     self.data_fov[i+1][j+1] = DATA_UNKNOWN
-         
-                        
-        # return perception_map_2d
+        
+        # check the other agents
+        for agent in self.observatiopn_space["pos"]:   
+            if (agent == pos).all():
+                continue 
+            else:
+                if abs(round(pos[0])-round(agent[0])) <= fov_radius + int(round(collision_radius)) and \
+                    abs(round(pos[1])-round(agent[1])) <= fov_radius + int(round(collision_radius)):
+
+                    
+                    err_x = round(agent[0]) - round(pos[0])
+                    err_y = round(agent[1]) - round(pos[1])
+
+                    collision_gird_array = self.getCollisionBody(agent_index, [err_x, err_y], collision_radius)
+                    
+                    for grid in collision_gird_array:
+                        y = int(grid[1])
+                        x = int(grid[0])
+                        if y >= 1 and y < 2*fov_radius+1 and x >= 1 and x < 2*fov_radius+1:
+                            self.display_fov[y][x] = DISPLAY_LAND
         return
 
     def agentGlobalPerception(self, agent_index):
@@ -253,7 +305,7 @@ class EnvManager(gym.Env):
                     self.data_fov[i][j] = DATA_WATER
         
         for idx in range(self.cfg.goal_num):
-            if self.observatiopn_space["goal_index"][idx] == False:
+            if self.observatiopn_space["goal_status"][idx] == False:
                 err_x = self.observatiopn_space["goal"][idx][0] - pos[0]
                 err_y = self.observatiopn_space["goal"][idx][1] - pos[1]
                 if abs(err_x) >= abs(err_y): # front triangle & rear triangle
@@ -279,10 +331,7 @@ class EnvManager(gym.Env):
         # return perception_map_2d
         return
 
-    def agentPerceptionUpdate(self, agent_index):
-        # for i in range(self.cfg.usv_agent_num):
-            #     self.agentGlobalPerception(i)
-            #     self.agentLocalPerception(i)
+    def agentPerceptionUpdate(self, agent_index): # 
         self.agentGlobalPerception(agent_index)
         self.agentLocalPerception(agent_index)
 
@@ -292,10 +341,6 @@ class EnvManager(gym.Env):
             for j in range(fov_radius*2+2):
                 self.data_fov[i][j] = old_fov[j][i]
 
-                # pass
-        # for i in range(fov_radius*2+2):
-        #     print(self.data_fov[i])
-        # print("\n\n\n\n")
         self.observatiopn_space["local_fov"][agent_index] = self.display_fov
         return
     
@@ -305,7 +350,7 @@ class EnvManager(gym.Env):
             self.observatiopn_space["pos"][agent_index][1]
         ]
         veh_type = self.observatiopn_space["veh_type"][agent_index]
-        veh_collision_radius = self.observatiopn_space["veh_collision"][agent_index]
+        veh_collision_radius = self.observatiopn_space["collision_radius"][agent_index]
         collision_object = self.getCollisionType(agent_index)
         check_bit = False
 
@@ -369,25 +414,11 @@ class EnvManager(gym.Env):
             
             for agent in range(self.cfg.usv_agent_num + self.cfg.uav_agent_num):
                 self.agentPerceptionUpdate(agent)
-
-                # debug
-                # tmp = []
-                # for i in range(self.cfg.usv_sense_radius*2+2):
-                #     for j in range(self.cfg.usv_sense_radius*2+2):
-                #         tmp[i][j] = (1, 2, 3)
-                # self.observatiopn_space["local_fov"][agent] = tmp
-                # debug
-
-                print(np.size(self.display_fov))
-                print(np.size(self.observatiopn_space["local_fov"][agent]))
-                self.observatiopn_space["local_fov"][agent] = self.display_fov
                 if self.agentCollisionUpdate(agent):
-                    print("fuck")
+                    self.printLog("fuck, it crashed")
 
             #   debug usage
             self.manualUpdate(monitor_agent)
-            self.agentPerceptionUpdate(monitor_agent)
-            test = self.agentCollisionUpdate(monitor_agent)
             #   debug usage
 
             # display global setting
@@ -400,7 +431,7 @@ class EnvManager(gym.Env):
             for i in range(self.cfg.goal_num):
                 pygame.draw.circle(
                     screen, 
-                    self.goalReached(i), 
+                    self.displayGoalStaus(i), 
                     self.transToDispaly(
                         self.observatiopn_space["goal"][i][0],
                         self.observatiopn_space["goal"][i][1]
@@ -410,8 +441,6 @@ class EnvManager(gym.Env):
             
             # display agent
             for agent in range(self.cfg.usv_agent_num + self.cfg.uav_agent_num):
-                # print("number: ", i+1)
-                # print(self.observatiopn_space["pos"][i])
                 if (self.observatiopn_space["veh_type"][agent] == ENCODE_USV).all():
                     pygame.draw.circle(
                         screen, 
@@ -435,12 +464,11 @@ class EnvManager(gym.Env):
             
             # display_fov
             local_view = pygame.Surface((self.cfg.usv_sense_radius*2+2, self.cfg.usv_sense_radius*2+2))
-            pygame.surfarray.blit_array(local_view, self.display_fov)
+            pygame.surfarray.blit_array(local_view, self.observatiopn_space["local_fov"][monitor_agent])
             local_view = pygame.transform.scale(local_view, (self.cfg.debug_view_px, self.cfg.debug_view_px))
             screen.blit(local_view, (self.cfg.env_px, 0))
             
             
-
             pygame.display.update()
 
         pygame.quit()
