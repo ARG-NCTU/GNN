@@ -14,12 +14,12 @@ class vgg_layer(nn.Module):
         return self.main(input)
 
 class VGG(nn.Module):
-    def __init__(self, dim):
+    def __init__(self, dim, channel):
         super(VGG, self).__init__()
         self.dim = dim
         # 18 x 18
         self.c1 = nn.Sequential(
-                vgg_layer(3, 64),
+                vgg_layer(channel, 64),
                 vgg_layer(64, 64),
                 )
         # 9 x 9
